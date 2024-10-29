@@ -723,7 +723,7 @@ package object geotiff {
 
     val layout = rdd.metadata.layout
     val crs = rdd.metadata.crs
-    rdd.flatMap {
+    val res = rdd.flatMap {
       case (key, tile) => features.filter { case (_, extent) =>
         val tileBounds = layout.mapTransform(extent)
 
@@ -732,12 +732,31 @@ package object geotiff {
         ((name, extent), (key, tile))
       }
     }.groupByKey()
-      .map { case ((name, extent), tiles) =>
-        val filePath = newFilePath(path, name)
+      .map { case ((tileId, extent), tiles) =>
+        // Each executor writes to a unique folder to avoid conflicts:
+        val uniqueFolderName = "tmp" + java.lang.Long.toUnsignedString(new java.security.SecureRandom().nextLong())
+        val base = Paths.get(Path.of(path).getParent + "/" + uniqueFolderName)
+        Files.createDirectories(base)
+        val filePath = base + "/" + newFilePath(Path.of(path).getFileName.toString, tileId)
 
         (stitchAndWriteToTiff(tiles, filePath, layout, crs, extent, croppedExtent, cropDimensions, compression), extent)
-      }.collect()
-      .toList.asJava
+      }.collect().map({
+        case (absolutePath, croppedExtent) =>
+          // Move output file to standard location. (On S3, a move is more a copy and delete):
+          val relativePath = Path.of(path).getParent.relativize(Path.of(absolutePath)).toString
+          val destinationPath = Path.of(path).getParent.resolve(relativePath.substring(relativePath.indexOf("/") + 1))
+          waitTillPathAvailable(Path.of(absolutePath))
+          Files.move(Path.of(absolutePath), destinationPath)
+          (destinationPath.toString, croppedExtent)
+      }).toList.asJava
+
+    // Clean up failed tasks:
+    Files.list(Path.of(path).getParent).forEach { p =>
+      if (Files.isDirectory(p) && p.getFileName.toString.startsWith("tmp")) {
+        FileUtils.deleteDirectory(p.toFile)
+      }
+    }
+    res
   }
 
   private def stitchAndWriteToTiff(tiles: Iterable[(SpatialKey, MultibandTile)], filePath: String,
