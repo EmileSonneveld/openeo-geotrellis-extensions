@@ -32,6 +32,7 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import spire.math.Integral
 import spire.syntax.cfor.cfor
 
+import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.{FileAlreadyExistsException, Files, NoSuchFileException, Path, Paths}
 import java.time.Duration
@@ -628,7 +629,7 @@ package object geotiff {
 
     val thegeotiff = new MultibandGeoTiff(tiffTile, croppedExtent, crs,formatOptions.tags,options,overviews = overviews.map(o=>MultibandGeoTiff(o,croppedExtent,crs,options = options.copy(subfileType = Some(ReducedImage)))))//.withOverviews(NearestNeighbor, List(4, 8, 16))
 
-    writeGeoTiff(thegeotiff, path)
+    writeGeoTiff(thegeotiff, path, Some(formatOptions))
   }
 
   private def toTiff(tiffs:collection.Map[Int, Array[Byte]] , gridBounds: GridBounds[Int], tileLayout: TileLayout, compression: DeflateCompression, cellType: CellType, detectedBandCount: Double, segmentCount: Int) = {
@@ -697,7 +698,7 @@ package object geotiff {
     val geoTiff = MultibandGeoTiff(adjusted, contextRDD.metadata.crs, GeoTiffOptions(compression))
       .withOverviews(NearestNeighbor, List(4, 8, 16))
 
-    writeGeoTiff(geoTiff, path)
+    writeGeoTiff(geoTiff, path, gtiffOptions = None)
     adjusted.extent
   }
 
@@ -786,7 +787,7 @@ package object geotiff {
     ) {
       geotiff = geotiff.withOverviews(NearestNeighbor, List(4, 8, 16))
     }
-    writeGeoTiff(geotiff, filePath)
+    writeGeoTiff(geotiff, filePath, Some(fo))
   }
 
   def saveSamples(rdd: MultibandTileLayerRDD[SpaceTimeKey],
@@ -869,9 +870,10 @@ package object geotiff {
       .toList.asJava
   }
 
-  def writeGeoTiff(geoTiff: MultibandGeoTiff, path: String): String = {
+  def writeGeoTiff(geoTiff: MultibandGeoTiff, path: String, gtiffOptions: Option[GTiffOptions]): String = {
     val tempFile = getTempFile(null, ".tif")
     geoTiff.write(tempFile.toString, optimizedOrder = true)
+    gtiffOptions.foreach(options => embedGdalMetadata(tempFile, options.tagsAsGdalMetadataXml))
 
     if (path.startsWith("s3:/")) {
       val correctS3Path = path.replaceFirst("s3:/(?!/)", "s3://")
@@ -966,5 +968,25 @@ package object geotiff {
     })
     result.collect()
     print("test done")
+  }
+
+  def embedGdalMetadata(geotiffPath: Path, gdalMetadata: xml.Elem): Unit = {
+    import scala.sys.process._
+    import java.nio.charset._
+
+    val outputBuffer = new StringBuilder
+    val processLogger = ProcessLogger(line => outputBuffer appendAll line)
+
+    // use temporary file to work around segfault in container
+    val tempFile = Files.createTempFile("GDALMetadata_", ".xml.tmp")
+    try {
+      Files.write(tempFile, s"$gdalMetadata\n".getBytes(StandardCharsets.US_ASCII)) // the newline is important
+
+      val args = Seq("tiffset", "-sf", "42112", tempFile.toString, geotiffPath.toString)
+      val exitCode = args ! processLogger
+
+      if (exitCode == 0) logger.debug(s"wrote $gdalMetadata to $geotiffPath")
+      else throw new IOException(s"${args mkString " "} failed; output was: $outputBuffer")
+    } finally Files.delete(tempFile)
   }
 }
