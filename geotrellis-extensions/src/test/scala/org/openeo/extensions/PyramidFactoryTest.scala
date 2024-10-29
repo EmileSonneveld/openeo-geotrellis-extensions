@@ -8,12 +8,14 @@ import geotrellis.spark.util.SparkUtils
 import geotrellis.vector.{Extent, MultiPolygon, ProjectedExtent}
 import org.apache.spark.SparkContext
 import org.junit.Test
+import org.junit.jupiter.api.Disabled
 import org.openeo.geotrelliscommon.{DataCubeParameters, ScopedMetadataTracker}
 import org.openeo.geotrellissentinelhub.{PyramidFactory, SampleType}
 
 import java.util.Collections
 import scala.collection.JavaConverters._
 
+@Disabled("Avoid 'You have exceeded your rate limit'")
 class PyramidFactoryTest {
 
   @Test
