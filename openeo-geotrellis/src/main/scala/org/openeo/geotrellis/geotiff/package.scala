@@ -129,6 +129,7 @@ package object geotiff {
     // Remove the executorAttemptDirectory part from the path:
     val destinationPath = parentDirectory.resolve(relativePath.substring(relativePath.indexOf("/") + 1))
     waitTillPathAvailable(Path.of(absolutePath))
+    Files.createDirectories(destinationPath.getParent)
     Files.move(Path.of(absolutePath), destinationPath)
     destinationPath
   }

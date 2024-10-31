@@ -15,7 +15,6 @@ import org.openeo.geotrellissentinelhub.{PyramidFactory, SampleType}
 import java.util.Collections
 import scala.collection.JavaConverters._
 
-@Disabled("Avoid 'You have exceeded your rate limit'")
 class PyramidFactoryTest {
 
   @Test

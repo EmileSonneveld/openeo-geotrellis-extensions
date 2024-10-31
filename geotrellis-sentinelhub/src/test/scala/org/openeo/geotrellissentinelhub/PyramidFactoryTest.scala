@@ -134,7 +134,6 @@ object PyramidFactoryTest {
   )
 }
 
-@Disabled("Avoid 'You have exceeded your rate limit'")
 class PyramidFactoryTest {
   import PyramidFactoryTest._
 
