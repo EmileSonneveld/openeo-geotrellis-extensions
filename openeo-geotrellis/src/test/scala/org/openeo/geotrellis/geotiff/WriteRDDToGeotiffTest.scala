@@ -13,14 +13,15 @@ import geotrellis.vector._
 import geotrellis.vector.io.json.GeoJson
 import org.apache.spark.{SparkConf, SparkContext, SparkEnv}
 import org.junit.Assert._
-import org.junit._
+import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.api.{BeforeAll, Test}
 import org.junit.rules.TemporaryFolder
+import org.junit.{AfterClass, Rule}
 import org.openeo.geotrellis.{LayerFixtures, OpenEOProcesses, ProjectedPolygons}
-import org.openeo.sparklisteners.GetInfoSparkListener
 import org.slf4j.{Logger, LoggerFactory}
 
 import java.nio.file.{Files, Path, Paths}
-import java.time.{LocalDate, LocalTime, ZoneOffset, ZonedDateTime}
+import java.time.{LocalTime, ZoneOffset, ZonedDateTime}
 import java.util
 import java.util.zip.Deflater._
 import scala.annotation.meta.getter
@@ -34,7 +35,7 @@ object WriteRDDToGeotiffTest{
 
   var sc: SparkContext = _
 
-  @BeforeClass
+  @BeforeAll
   def setupSpark() = {
     sc = {
       val conf = new SparkConf().setMaster("local[2]").setAppName(getClass.getSimpleName)
@@ -151,11 +152,7 @@ class WriteRDDToGeotiffTest {
   }
 
   @Test
-  def testWriteRDD_apply_neighborhood(): Unit ={
-    val outDir = Paths.get("tmp/testWriteRDD_apply_neighborhood/")
-    new Directory(outDir.toFile).deepList().foreach(_.delete())
-    Files.createDirectories(outDir)
-
+  def testWriteRDD_apply_neighborhood(@TempDir outDir: Path): Unit = {
     val layoutCols = 8
     val layoutRows = 4
 

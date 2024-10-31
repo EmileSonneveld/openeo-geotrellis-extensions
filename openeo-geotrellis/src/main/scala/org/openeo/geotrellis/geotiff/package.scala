@@ -104,6 +104,42 @@ package object geotiff {
     ret.map(t => (t._1, t._2, t._3)).asJava
   }
 
+  private val executorAttemptDirectoryPrefix = "executorAttemptDirectory"
+
+  private def createExecutorAttemptDirectory(parentDirectory: String): Path = {
+    createExecutorAttemptDirectory(Path.of(parentDirectory))
+  }
+
+  private def createExecutorAttemptDirectory(parentDirectory: Path): Path = {
+    // Multiple executors with the same task can run at the same time.
+    // Writing their output to the same path would create a racing condition.
+    // Let's provide a unique directory for each executor:
+    val rand = new java.security.SecureRandom().nextLong()
+    val uniqueFolderName = executorAttemptDirectoryPrefix + java.lang.Long.toUnsignedString(rand)
+    val executorAttemptDirectory = Paths.get(parentDirectory + "/" + uniqueFolderName)
+    Files.createDirectories(executorAttemptDirectory)
+    executorAttemptDirectory
+  }
+
+  private def moveFromExecutorAttemptDirectory(parentDirectory: Path, absolutePath: String): Path = {
+    // Move output file to standard location. (On S3, a move is more a copy and delete):
+    val relativePath = parentDirectory.relativize(Path.of(absolutePath)).toString
+    if (!relativePath.startsWith(executorAttemptDirectoryPrefix)) throw new Exception()
+    // Remove the executorAttemptDirectory part from the path:
+    val destinationPath = parentDirectory.resolve(relativePath.substring(relativePath.indexOf("/") + 1))
+    waitTillPathAvailable(Path.of(absolutePath))
+    Files.move(Path.of(absolutePath), destinationPath)
+    destinationPath
+  }
+
+  private def cleanUpExecutorAttemptDirectory(parentDirectory: Path): Unit = {
+    Files.list(parentDirectory).forEach { p =>
+      if (Files.isDirectory(p) && p.getFileName.toString.startsWith(executorAttemptDirectoryPrefix)) {
+        FileUtils.deleteDirectory(p.toFile)
+      }
+    }
+  }
+
   /**
    * Save temporal rdd, on the executors
    *
@@ -176,10 +212,8 @@ package object geotiff {
       val segmentCount = bandSegmentCount * tiffBands
 
       // Each executor writes to a unique folder to avoid conflicts:
-      val uniqueFolderName = "tmp" + java.lang.Long.toUnsignedString(new java.security.SecureRandom().nextLong())
-      val base = Paths.get(path + "/" + uniqueFolderName)
-      Files.createDirectories(base)
-      val thePath = base.resolve(filename).toString
+      val executorAttemptDirectory = createExecutorAttemptDirectory(path)
+      val thePath = executorAttemptDirectory.resolve(filename).toString
 
       // filter band tags that match bandIndices
       val fo = formatOptions.deepClone()
@@ -192,22 +226,14 @@ package object geotiff {
         tileLayout, compression, cellTypes.head, tiffBands, segmentCount, fo,
       )
       (correctedPath, timestamp, croppedExtent, bandIndices)
-    }.collect().map({
+    }.collect().map {
       case (absolutePath, timestamp, croppedExtent, bandIndices) =>
-        // Move output file to standard location. (On S3, a move is more a copy and delete):
-        val relativePath = Path.of(path).relativize(Path.of(absolutePath)).toString
-        val destinationPath = Path.of(path).resolve(relativePath.substring(relativePath.indexOf("/") + 1))
-        waitTillPathAvailable(Path.of(absolutePath))
-        Files.move(Path.of(absolutePath), destinationPath)
+        val destinationPath = moveFromExecutorAttemptDirectory(Path.of(path), absolutePath)
         (destinationPath.toString, timestamp, croppedExtent, bandIndices)
-    }).toList.asJava
+    }.toList.asJava
 
-    // Clean up failed tasks:
-    Files.list(Path.of(path)).forEach { p =>
-      if (Files.isDirectory(p) && p.getFileName.toString.startsWith("tmp")) {
-        FileUtils.deleteDirectory(p.toFile)
-      }
-    }
+    cleanUpExecutorAttemptDirectory(Path.of(path))
+
     res
   }
 
@@ -254,12 +280,10 @@ package object geotiff {
         }
       }
       val res = rdd_per_band.groupByKey().map { case ((name, bandIndex), tiles) =>
-        val uniqueFolderName = "tmp" + java.lang.Long.toUnsignedString(new java.security.SecureRandom().nextLong())
         val fixedPath =
           if (path.endsWith("out")) {
-            val base = path.substring(0, path.length - 3) + uniqueFolderName + "/"
-            Files.createDirectories(Path.of(base))
-            base + name
+            val executorAttemptDirectory = createExecutorAttemptDirectory(path.substring(0, path.length - 3))
+            executorAttemptDirectory + "/" + name
           }
           else {
             path
@@ -272,27 +296,22 @@ package object geotiff {
 
         (stitchAndWriteToTiff(tiles, fixedPath, layout, crs, extent, None, None, compression, Some(fo)),
           Collections.singletonList(bandIndex))
-      }.collect().map({
-        case (absolutePath, y) =>
+      }.collect().map {
+        case (absolutePath, bandIndices) =>
           if (path.endsWith("out")) {
-            // Move output file to standard location. (On S3, a move is more a copy and delete):
             val beforeOut = path.substring(0, path.length - "out".length)
-            val relativePath = Path.of(beforeOut).relativize(Path.of(absolutePath)).toString
-            val destinationPath = beforeOut + relativePath.substring(relativePath.indexOf("/") + 1)
-            waitTillPathAvailable(Path.of(absolutePath))
-            Files.move(Path.of(absolutePath), Path.of(destinationPath))
-            (destinationPath, y)
+            val destinationPath = moveFromExecutorAttemptDirectory(Path.of(beforeOut), absolutePath)
+            (destinationPath.toString, bandIndices)
           } else {
-            (absolutePath, y)
+            (absolutePath, bandIndices)
           }
-      }).toList.sortBy(_._1).asJava
-      // Clean up failed tasks:
-      val beforeOut = path.substring(0, path.length - "out".length)
-      Files.list(Path.of(beforeOut)).forEach { p =>
-        if (Files.isDirectory(p) && p.getFileName.toString.startsWith("tmp")) {
-          FileUtils.deleteDirectory(p.toFile)
-        }
+      }.toList.sortBy(_._1).asJava
+
+      if (path.endsWith("out")) {
+        val beforeOut = path.substring(0, path.length - "out".length)
+        cleanUpExecutorAttemptDirectory(Path.of(beforeOut))
       }
+
       res
     } else {
       val tmp = saveRDDGeneric(rdd, bandCount, path, zLevel, cropBounds, formatOptions).asScala
@@ -734,28 +753,18 @@ package object geotiff {
     }.groupByKey()
       .map { case ((tileId, extent), tiles) =>
         // Each executor writes to a unique folder to avoid conflicts:
-        val uniqueFolderName = "tmp" + java.lang.Long.toUnsignedString(new java.security.SecureRandom().nextLong())
-        val base = Paths.get(Path.of(path).getParent + "/" + uniqueFolderName)
-        Files.createDirectories(base)
-        val filePath = base + "/" + newFilePath(Path.of(path).getFileName.toString, tileId)
+        val executorAttemptDirectory = createExecutorAttemptDirectory(Path.of(path).getParent)
+        val filePath = executorAttemptDirectory + "/" + newFilePath(Path.of(path).getFileName.toString, tileId)
 
         (stitchAndWriteToTiff(tiles, filePath, layout, crs, extent, croppedExtent, cropDimensions, compression), extent)
-      }.collect().map({
+      }.collect().map {
         case (absolutePath, croppedExtent) =>
-          // Move output file to standard location. (On S3, a move is more a copy and delete):
-          val relativePath = Path.of(path).getParent.relativize(Path.of(absolutePath)).toString
-          val destinationPath = Path.of(path).getParent.resolve(relativePath.substring(relativePath.indexOf("/") + 1))
-          waitTillPathAvailable(Path.of(absolutePath))
-          Files.move(Path.of(absolutePath), destinationPath)
+          val destinationPath = moveFromExecutorAttemptDirectory(Path.of(path).getParent, absolutePath)
           (destinationPath.toString, croppedExtent)
-      }).toList.asJava
+      }.toList.asJava
 
-    // Clean up failed tasks:
-    Files.list(Path.of(path).getParent).forEach { p =>
-      if (Files.isDirectory(p) && p.getFileName.toString.startsWith("tmp")) {
-        FileUtils.deleteDirectory(p.toFile)
-      }
-    }
+    cleanUpExecutorAttemptDirectory(Path.of(path).getParent)
+
     res
   }
 
