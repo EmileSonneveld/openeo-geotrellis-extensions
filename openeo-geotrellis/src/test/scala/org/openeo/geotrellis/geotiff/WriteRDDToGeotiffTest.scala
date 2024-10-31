@@ -1,5 +1,6 @@
 package org.openeo.geotrellis.geotiff
 
+import better.files.File.apply
 import geotrellis.layer.{CRSWorldExtent, SpaceTimeKey, SpatialKey, ZoomedLayoutScheme}
 import geotrellis.proj4.LatLng
 import geotrellis.raster.io.geotiff.GeoTiff
@@ -69,7 +70,7 @@ class WriteRDDToGeotiffTest {
 
 
   @Test
-  def testWriteRDD(): Unit ={
+  def testWriteRDD(@TempDir tempDir: Path): Unit ={
     val layoutCols = 8
     val layoutRows = 4
 
@@ -77,8 +78,7 @@ class WriteRDDToGeotiffTest {
     val imageTile = ByteArrayTile(intImage,layoutCols*256, layoutRows*256)
 
     val tileLayerRDD = TileLayerRDDBuilders.createMultibandTileLayerRDD(WriteRDDToGeotiffTest.sc,MultibandTile(imageTile),TileLayout(layoutCols,layoutRows,256,256),LatLng)
-    val filename = "out.tif"
-    Files.deleteIfExists(Path.of(filename))
+    val filename = (tempDir / "out.tif").toString()
 
     saveRDD(tileLayerRDD.withContext{_.repartition(layoutCols*layoutRows)},1,filename,formatOptions = allOverviewOptions)
 
@@ -181,7 +181,7 @@ class WriteRDDToGeotiffTest {
   }
 
   @Test
-  def testWriteMultibandRDD(): Unit ={
+  def testWriteMultibandRDD(@TempDir tempDir: Path): Unit ={
     val layoutCols = 8
     val layoutRows = 4
 
@@ -192,8 +192,7 @@ class WriteRDDToGeotiffTest {
     val thirdBand = imageTile.map{x => if(x >= 5 ) 50 else 200 }
 
     val tileLayerRDD = TileLayerRDDBuilders.createMultibandTileLayerRDD(WriteRDDToGeotiffTest.sc,MultibandTile(imageTile,secondBand,thirdBand),TileLayout(layoutCols,layoutRows,256,256),LatLng)
-    val filename = "outRGB.tif"
-    Files.deleteIfExists(Path.of(filename))
+    val filename = (tempDir / "outRGB.tif").toString()
     saveRDD(tileLayerRDD.withContext{_.repartition(layoutCols*layoutRows)},3,filename)
     val result = GeoTiff.readMultiband(filename).raster.tile
     assertArrayEquals(imageTile.toArray(),result.band(0).toArray())
@@ -203,7 +202,7 @@ class WriteRDDToGeotiffTest {
 
 
   @Test
-  def testWriteCroppedRDD(): Unit ={
+  def testWriteCroppedRDD(@TempDir tempDir: Path): Unit ={
     val layoutCols = 8
     val layoutRows = 4
 
@@ -219,11 +218,9 @@ class WriteRDDToGeotiffTest {
     val cropBounds = Extent(-115, -65, 5.0, 56)
 
     val croppedRaster: Raster[MultibandTile] = tileLayerRDD.stitch().crop(cropBounds)
-    val referenceFile = "croppedRaster.tif"
-    Files.deleteIfExists(Path.of(referenceFile))
+    val referenceFile = (tempDir / "croppedRaster.tif").toString()
     GeoTiff(croppedRaster,LatLng).write(referenceFile)
-    val filename = "outRGBCropped3.tif"
-    Files.deleteIfExists(Path.of(filename))
+    val filename = (tempDir / "outRGBCropped3.tif").toString()
     saveRDD(tileLayerRDD.withContext{_.repartition(layoutCols*layoutRows)},3,filename,cropBounds = Some(cropBounds))
     val result = GeoTiff.readMultiband(filename).raster
     val reference = GeoTiff.readMultiband(referenceFile).raster
@@ -234,7 +231,7 @@ class WriteRDDToGeotiffTest {
   }
 
   @Test
-  def testWriteRDDGlobalLayout(): Unit ={
+  def testWriteRDDGlobalLayout(@TempDir tempDir: Path): Unit ={
     val layoutCols = 8
     val layoutRows = 8
 
@@ -250,11 +247,10 @@ class WriteRDDToGeotiffTest {
 
     val cropBounds = Extent(0, -90, 180, 90)
     val croppedRaster: Raster[MultibandTile] = tileLayerRDD.stitch().crop(cropBounds)
-    val referenceFile = "croppedRasterGlobalLayout.tif"
+    val referenceFile = (tempDir / "croppedRasterGlobalLayout.tif").toString()
     GeoTiff(croppedRaster,LatLng).write(referenceFile)
 
-    val filename = "outCropped.tif"
-    Files.deleteIfExists(Path.of(filename))
+    val filename = (tempDir / "outCropped.tif").toString()
     saveRDD(tileLayerRDD.withContext{_.repartition(tileLayerRDD.count().toInt)},3,filename,cropBounds = Some(cropBounds))
     val resultRaster = GeoTiff.readMultiband(filename).raster
 
@@ -266,7 +262,7 @@ class WriteRDDToGeotiffTest {
   }
 
   @Test
-  def testWriteEmptyRdd(): Unit ={
+  def testWriteEmptyRdd(@TempDir tempDir: Path): Unit ={
     val layoutCols = 8
     val layoutRows = 4
 
@@ -275,8 +271,7 @@ class WriteRDDToGeotiffTest {
 
     val tileLayerRDD = TileLayerRDDBuilders.createMultibandTileLayerRDD(WriteRDDToGeotiffTest.sc,MultibandTile(imageTile),TileLayout(layoutCols,layoutRows,256,256),LatLng)
     val empty = tileLayerRDD.withContext{_.filter(_ => false)}
-    val filename = "outEmpty.tif"
-    Files.deleteIfExists(Path.of(filename))
+    val filename = (tempDir / "outEmpty.tif").toString()
     val cropBounds = Extent(-115, -65, 5.0, 56)
     saveRDD(empty,-1,filename,cropBounds = Some(cropBounds))
 
