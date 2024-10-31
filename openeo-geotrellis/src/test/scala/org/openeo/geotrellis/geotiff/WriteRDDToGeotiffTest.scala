@@ -298,7 +298,7 @@ class WriteRDDToGeotiffTest {
     val ( imageTile:ByteArrayTile, filtered:MultibandTileLayerRDD[SpatialKey]) = LayerFixtures.createLayerWithGaps(layoutCols,layoutRows)
 
     val outDir = Paths.get("tmp/testWriteMultibandRDDWithGaps/")
-    new Directory(outDir.toFile).deepFiles.foreach(_.delete())
+    new Directory(outDir.toFile).deepList().foreach(_.delete())
     Files.createDirectories(outDir)
 
     val filename = outDir + "/outFiltered.tif"
@@ -347,6 +347,46 @@ class WriteRDDToGeotiffTest {
     assertArrayEquals(croppedReference.toArray(), croppedOutput.toArray())
   }
 
+  @Test
+  def testWriteMultibandRDDWithGapsFilepathPerBand(): Unit = {
+    val layoutCols = 8
+    val layoutRows = 4
+    val (imageTile: ByteArrayTile, filtered: MultibandTileLayerRDD[SpatialKey]) = LayerFixtures.createLayerWithGaps(layoutCols, layoutRows)
+
+    val outDir = Paths.get("tmp/testWriteMultibandRDDWithGapsFilepathPerBand/")
+    new Directory(outDir.toFile).deepList().foreach(_.delete())
+    Files.createDirectories(outDir)
+
+    val filename = outDir + "/out"
+    val options = new GTiffOptions()
+    options.separateAssetPerBand = true
+
+    val filepathPerBand: util.ArrayList[String] = new util.ArrayList[String]()
+    filepathPerBand.add("testA/B01.tiff")
+    filepathPerBand.add("testA/A/B02.tiff")
+    filepathPerBand.add("testB/B03.tiff")
+    options.setFilepathPerBand(Some(filepathPerBand))
+    options.addBandTag(0, "DESCRIPTION", "B01")
+    options.addBandTag(1, "DESCRIPTION", "B02")
+    options.addBandTag(2, "DESCRIPTION", "B03")
+    val paths = saveRDD(filtered.withContext {
+      _.repartition(layoutCols * layoutRows)
+    }, 3, filename, formatOptions = options)
+    assertEquals(3, paths.size())
+
+    GeoTiff.readMultiband(outDir.resolve("testA/B01.tiff").toString).raster.tile
+    GeoTiff.readMultiband(outDir.resolve("testA/A/B02.tiff").toString).raster.tile
+    GeoTiff.readMultiband(outDir.resolve("testB/B03.tiff").toString).raster.tile
+
+    val result = GeoTiff.readMultiband(paths.asScala.find(_.contains("B01")).get).raster.tile
+
+    //crop away the area where data was removed, and check if rest of geotiff is still fine
+    val croppedReference = imageTile.crop(2 * 256, 0, layoutCols * 256, layoutRows * 256).toArrayTile()
+
+    val resultWidth = result.band(0).toArrayTile().dimensions.cols
+    val croppedOutput = result.band(0).toArrayTile().crop(resultWidth - (6 * 256), 0, layoutCols * 256, layoutRows * 256)
+    assertArrayEquals(croppedReference.toArray(), croppedOutput.toArray())
+  }
 
   @Test
   def testWriteMultibandTemporalRDDWithGaps(): Unit = {
@@ -355,7 +395,7 @@ class WriteRDDToGeotiffTest {
     val (layer, imageTile) = LayerFixtures.aSpacetimeTileLayerRdd(layoutCols, layoutRows)
 
     val outDir = Paths.get("tmp/testWriteMultibandTemporalRDDWithGaps/")
-    new Directory(outDir.toFile).deepFiles.foreach(_.delete())
+    new Directory(outDir.toFile).deepList().foreach(_.delete())
     Files.createDirectories(outDir)
 
     saveRDDTemporal(layer, outDir.toString)
@@ -378,7 +418,7 @@ class WriteRDDToGeotiffTest {
     val (layer, imageTile) = LayerFixtures.aSpacetimeTileLayerRdd(layoutCols, layoutRows)
 
     val outDir = Paths.get("tmp/testWriteMultibandTemporalRDDWithGapsSeparateAssetPerBand/")
-    new Directory(outDir.toFile).deepFiles.foreach(_.delete())
+    new Directory(outDir.toFile).deepList().foreach(_.delete())
     Files.createDirectories(outDir)
 
     val options = new GTiffOptions()
@@ -395,6 +435,37 @@ class WriteRDDToGeotiffTest {
     GeoTiff.readMultiband(outDir.resolve("openEO_2017-01-03Z_B01.tif").toString).raster.tile
     GeoTiff.readMultiband(outDir.resolve("openEO_2017-01-03Z_B02.tif").toString).raster.tile
     GeoTiff.readMultiband(outDir.resolve("openEO_2017-01-03Z_B03.tif").toString).raster.tile
+  }
+
+  @Test
+  def testWriteMultibandTemporalRDDWithGapsFilepathPerBand(): Unit = {
+    val layoutCols = 8
+    val layoutRows = 4
+    val (layer, imageTile) = LayerFixtures.aSpacetimeTileLayerRdd(layoutCols, layoutRows)
+
+    val outDir = Paths.get("tmp/testWriteMultibandTemporalRDDWithGapsFilepathPerBand/")
+    new Directory(outDir.toFile).deepList().foreach(_.delete())
+    Files.createDirectories(outDir)
+
+    val options = new GTiffOptions()
+    val filepathPerBand: util.ArrayList[String] = new util.ArrayList[String]()
+    filepathPerBand.add("testA/<date>_B01.tif")
+    filepathPerBand.add("testA/A/<date>_B02.tif")
+    filepathPerBand.add("testB/<date>_B03.tif")
+    options.setFilepathPerBand(Some(filepathPerBand))
+    options.separateAssetPerBand = true
+    options.addBandTag(0, "DESCRIPTION", "B01")
+    options.addBandTag(1, "DESCRIPTION", "B02")
+    options.addBandTag(2, "DESCRIPTION", "B03")
+    saveRDDTemporal(layer, outDir.toString, formatOptions = options)
+
+    GeoTiff.readMultiband(outDir.resolve("testA/2017-01-02Z_B01.tif").toString).raster.tile
+    GeoTiff.readMultiband(outDir.resolve("testA/A/2017-01-02Z_B02.tif").toString).raster.tile
+    GeoTiff.readMultiband(outDir.resolve("testB/2017-01-02Z_B03.tif").toString).raster.tile
+
+    GeoTiff.readMultiband(outDir.resolve("testA/2017-01-03Z_B01.tif").toString).raster.tile
+    GeoTiff.readMultiband(outDir.resolve("testA/A/2017-01-03Z_B02.tif").toString).raster.tile
+    GeoTiff.readMultiband(outDir.resolve("testB/2017-01-03Z_B03.tif").toString).raster.tile
   }
 
   @Test
