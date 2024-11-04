@@ -27,20 +27,16 @@ import org.openeo.geotrellis.netcdf.NetCDFRDDWriter.fixedTimeOffset
 import org.openeo.geotrellis.stac.STACItem
 import org.openeo.geotrellis.tile_grid.TileGrid
 import org.slf4j.LoggerFactory
-import software.amazon.awssdk.core.sync.RequestBody
-import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import spire.math.Integral
 import spire.syntax.cfor.cfor
 
 import java.io.IOException
-import java.nio.channels.FileChannel
-import java.nio.file.{FileAlreadyExistsException, Files, NoSuchFileException, Path, Paths}
+import java.nio.file.{Files, Path, Paths}
 import java.time.Duration
 import java.time.format.DateTimeFormatter
 import java.util.{ArrayList, Collections, Map, List => JList}
 import scala.collection.JavaConverters._
 import scala.reflect._
-import scala.util.control.Breaks.{break, breakable}
 
 package object geotiff {
 
@@ -118,7 +114,9 @@ package object geotiff {
     val rand = new java.security.SecureRandom().nextLong()
     val uniqueFolderName = executorAttemptDirectoryPrefix + java.lang.Long.toUnsignedString(rand)
     val executorAttemptDirectory = Paths.get(parentDirectory + "/" + uniqueFolderName)
-    Files.createDirectories(executorAttemptDirectory)
+    if (!CreoS3Utils.isS3(parentDirectory.toString)) {
+      Files.createDirectories(executorAttemptDirectory)
+    }
     executorAttemptDirectory
   }
 
@@ -128,18 +126,17 @@ package object geotiff {
     if (!relativePath.startsWith(executorAttemptDirectoryPrefix)) throw new Exception()
     // Remove the executorAttemptDirectory part from the path:
     val destinationPath = parentDirectory.resolve(relativePath.substring(relativePath.indexOf("/") + 1))
-    waitTillPathAvailable(Path.of(absolutePath))
-    Files.createDirectories(destinationPath.getParent)
-    Files.move(Path.of(absolutePath), destinationPath)
+    CreoS3Utils.waitTillPathAvailable(Path.of(absolutePath))
+    if (!CreoS3Utils.isS3(parentDirectory.toString)) {
+      Files.createDirectories(destinationPath.getParent)
+    }
+    CreoS3Utils.moveAsset(absolutePath, destinationPath.toString) // TODO: Use move instead of copy
     destinationPath
   }
 
-  private def cleanUpExecutorAttemptDirectory(parentDirectory: Path): Unit = {
-    Files.list(parentDirectory).forEach { p =>
-      if (Files.isDirectory(p) && p.getFileName.toString.startsWith(executorAttemptDirectoryPrefix)) {
-        FileUtils.deleteDirectory(p.toFile)
-      }
-    }
+  private def cleanUpExecutorAttemptDirectory(parentDirectory: String): Unit = {
+    val list = CreoS3Utils.asseetPathListDirectChildren(parentDirectory).filter(_.contains(executorAttemptDirectoryPrefix))
+    CreoS3Utils.assetDeleteFolders(list)
   }
 
   /**
@@ -238,7 +235,7 @@ package object geotiff {
         (destinationPath.toString, timestamp, croppedExtent, bandIndices)
     }.toList.asJava
 
-    cleanUpExecutorAttemptDirectory(Path.of(path))
+    cleanUpExecutorAttemptDirectory(path)
 
     res
   }
@@ -324,7 +321,7 @@ package object geotiff {
 
       if (path.endsWith("out")) {
         val beforeOut = path.substring(0, path.length - "out".length)
-        cleanUpExecutorAttemptDirectory(Path.of(beforeOut))
+        cleanUpExecutorAttemptDirectory(beforeOut)
       }
 
       res
@@ -778,7 +775,7 @@ package object geotiff {
           (destinationPath.toString, croppedExtent)
       }.toList.asJava
 
-    cleanUpExecutorAttemptDirectory(Path.of(path).getParent)
+    cleanUpExecutorAttemptDirectory(Path.of(path).getParent.toString)
 
     res
   }
@@ -921,65 +918,14 @@ package object geotiff {
 
     if (path.startsWith("s3:/")) {
       val correctS3Path = path.replaceFirst("s3:/(?!/)", "s3://")
-      uploadToS3(tempFile, correctS3Path)
+      CreoS3Utils.uploadToS3(tempFile, correctS3Path)
     } else {
       // Retry should not be needed at this point, but it is almost free to keep it.
-      moveOverwriteWithRetries(tempFile, Path.of(path))
+      CreoS3Utils.moveOverwriteWithRetries(tempFile, Path.of(path))
       path
     }
   }
 
-  private def waitTillPathAvailable(path: Path): Unit = {
-    var retry = 0
-    val maxTries = 20
-    while (!path.toFile.exists()) {
-      if (retry < maxTries) {
-        retry += 1
-        val seconds = 5
-        logger.info(f"Waiting for path to be available. Try $retry/$maxTries (sleep:$seconds seconds): $path")
-        Thread.sleep(seconds * 1000)
-      } else {
-        logger.warn(f"Path is not available after $maxTries tries: $path")
-        // Throw error instead?
-        return
-      }
-    }
-  }
-
-  def moveOverwriteWithRetries(oldPath: Path, newPath: Path): Unit = {
-    var try_count = 1
-    breakable {
-      while (true) {
-        try {
-          if (newPath.toFile.exists()) {
-            // It might be a partial result of a previous failing task.
-            logger.info(f"Will replace $newPath. (try $try_count)")
-          }
-          Files.deleteIfExists(newPath)
-          Files.move(oldPath, newPath)
-          break
-        } catch {
-          case e: FileAlreadyExistsException =>
-            // Here if another executor wrote the file between the delete and the move statement.
-            try_count += 1
-            if (try_count > 5) {
-              throw e
-            }
-        }
-      }
-    }
-  }
-
-  def uploadToS3(localFile: Path, s3Path: String) = {
-    val s3Uri = new AmazonS3URI(s3Path)
-    val objectRequest = PutObjectRequest.builder
-      .bucket(s3Uri.getBucket)
-      .key(s3Uri.getKey)
-      .build
-
-    CreoS3Utils.getCreoS3Client().putObject(objectRequest, RequestBody.fromFile(localFile))
-    s3Path
-  }
 
   case class ContextSeq[K, V, M](tiles: Iterable[(K, V)], metadata: LayoutDefinition) extends Seq[(K, V)] with Metadata[LayoutDefinition] {
     override def length: Int = tiles.size
