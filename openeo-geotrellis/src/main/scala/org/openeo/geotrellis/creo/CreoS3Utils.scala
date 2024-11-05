@@ -143,8 +143,7 @@ object CreoS3Utils {
       val listObjectsResponse = getCreoS3Client().listObjects(listObjectsRequest)
       listObjectsResponse.contents.asScala.map(o => f"s3://${s3Uri.getBucket}/${o.key}").toSet
     } else {
-      val list = Files.list(Path.of(path))
-      List(list).map(_.toString).toSet
+      Files.list(Path.of(path)).toArray.map(_.toString).toSet
     }
   }
 
