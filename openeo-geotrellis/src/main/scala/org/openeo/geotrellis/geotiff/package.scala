@@ -130,7 +130,7 @@ package object geotiff {
     if (!CreoS3Utils.isS3(parentDirectory.toString)) {
       Files.createDirectories(destinationPath.getParent)
     }
-    CreoS3Utils.moveAsset(absoluteFilePath, destinationPath.toString)
+    CreoS3Utils.moveOverwriteWithRetries(absoluteFilePath, destinationPath.toString)
     destinationPath
   }
 
@@ -923,7 +923,7 @@ package object geotiff {
       CreoS3Utils.uploadToS3(tempFile, correctS3Path)
     } else {
       // Retry should not be needed at this point, but it is almost free to keep it.
-      CreoS3Utils.moveOverwriteWithRetries(tempFile, Path.of(path))
+      CreoS3Utils.moveOverwriteWithRetries(tempFile.toString, path)
       path
     }
   }

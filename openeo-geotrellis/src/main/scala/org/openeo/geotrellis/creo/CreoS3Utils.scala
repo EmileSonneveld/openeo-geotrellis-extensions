@@ -212,20 +212,20 @@ object CreoS3Utils {
     }
   }
 
-  def moveOverwriteWithRetries(oldPath: Path, newPath: Path): Unit = {
+  def moveOverwriteWithRetries(oldPath: String, newPath: String): Unit = {
     var try_count = 1
     breakable {
       while (true) {
         try {
-          if (assetExists(newPath.toString)) {
+          if (assetExists(newPath)) {
             // It might be a partial result of a previous failing task.
             logger.info(f"Will replace $newPath. (try $try_count)")
+            assetDelete(newPath)
           }
-          Files.deleteIfExists(newPath)
-          Files.move(oldPath, newPath)
+          moveAsset(oldPath, newPath)
           break
         } catch {
-          case e: FileAlreadyExistsException =>
+          case e: Exception =>
             // Here if another executor wrote the file between the delete and the move statement.
             try_count += 1
             if (try_count > 5) {
