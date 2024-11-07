@@ -641,7 +641,7 @@ package object geotiff {
 
         val segmentCount = bandSegmentCount * detectedBandCount
         val newPath = newFilePath(path, name)
-        writeTiff(newPath, tiffs, gridBounds, extent.intersection(croppedExtent).get, preprocessedRdd.metadata.crs, tileLayout, compression, cellType, detectedBandCount, segmentCount)
+        writeTiff(newPath, tiffs, gridBounds, extent.intersection(croppedExtent).get, preprocessedRdd.metadata.crs, tileLayout, compression, cellType, detectedBandCount, segmentCount)._1
       }.collect()
       .toList
   }
