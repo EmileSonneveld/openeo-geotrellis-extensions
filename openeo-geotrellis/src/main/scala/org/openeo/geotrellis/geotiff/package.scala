@@ -952,7 +952,7 @@ package object geotiff {
       val exitCode = args ! processLogger
 
       if (exitCode == 0) logger.debug(s"wrote $gdalMetadata to $geotiffPath")
-      else throw new IOException(s"${args mkString " "} failed; output was: $outputBuffer")
+      else logger.warn(s"${args mkString " "} failed; output was: $outputBuffer")
     } finally Files.delete(tempFile)
   }
 
